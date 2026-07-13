@@ -1048,6 +1048,10 @@ def fill_main_table(t2, data, doc=None, src_doc=None):
         copy_sketch(src_doc, doc)
 
     # ===== pWPS 母材 R11~R16 =====
+    # 试件序号：pWPS编号-1
+    pwps_no = data.get("pwps_no") or ""
+    specimen_no = (pwps_no + "-1") if pwps_no else "1"
+    put(11, 2, specimen_no); put(11, 3, specimen_no)
     # 异种金属：C2=材料1, C3=材料2（与...相焊）
     mat2 = data.get("base_material2") or data.get("base_material")
     std2 = data.get("base_standard2") or data.get("base_standard")
@@ -1062,7 +1066,7 @@ def fill_main_table(t2, data, doc=None, src_doc=None):
     put(18, 2, data.get("fillet_thick") or "/"); put(18, 3, data.get("fillet_thick") or "/")  # 角焊缝母材厚度范围
     put(19, 2, data.get("pipe_range") or "/"); put(19, 3, data.get("pipe_range") or "/")  # 管子直径、壁厚范围
     put(27, 2, data.get("butt_weld_thick")); put(27, 3, data.get("butt_weld_thick"))
-    put(28, 2, "/"); put(28, 3, "/")
+    put(28, 2, data.get("fillet_weld_thick") or "/"); put(28, 3, data.get("fillet_weld_thick") or "/")  # 角焊缝焊缝金属范围
 
     # ===== pWPS 填充金属 R22~R26 =====
     # 焊材类别（种类）= 焊条/焊丝 (fill_type)；分类代号 = FeT-1-2 (fill_class)
@@ -1096,6 +1100,12 @@ def fill_main_table(t2, data, doc=None, src_doc=None):
     put(36, 4, data.get("weld_pos_butt"))
     put(36, 6, data.get("weld_dir"))  # 方向（向上、向下）
 
+    # 钨极类型/喷嘴直径：非GTAW/PAW方法填 /
+    method = (data.get("weld_method") or "").upper()
+    if method not in ("GTAW", "PAW"):
+        write_labeled_cell(t2, 40, 1, "钨极类型及直径", "/")
+        write_labeled_cell(t2, 40, 2, "喷嘴直径", "/")
+
     # ===== pWPS 电特性表 R44-R45 =====
     fill_passes_table(t2, FM.TEMPLATE_PASS_ROWS["pwps"], data, "range")
 
@@ -1106,6 +1116,10 @@ def fill_main_table(t2, data, doc=None, src_doc=None):
     set_checkboxes(t2, data.get("weld_pos_butt", ""))
 
     # ===== PQR 母材 R66~R71 =====
+    # 试件序号：PQR编号-1
+    report_no = data.get("report_no") or ""
+    pqr_specimen = (report_no + "-1") if report_no else "1"
+    put(66, 2, pqr_specimen); put(66, 3, pqr_specimen)
     # 异种金属：C2=材料1, C3=材料2（材料代号和标准都已拆分）
     pqmat2 = data.get("pqr_base_material2") or data.get("pqr_base_material")
     pqstd2 = data.get("pqr_base_standard2") or data.get("pqr_base_standard")
@@ -1136,6 +1150,12 @@ def fill_main_table(t2, data, doc=None, src_doc=None):
     put(80, 4, data.get("pqr_interpass"))
     put(83, 2, data.get("pqr_pwht_temp"))
     put(83, 4, data.get("pqr_pwht_time"))
+
+    # 钨极类型/喷嘴直径：非GTAW/PAW方法填 /（PQR区）
+    method = (data.get("weld_method") or "").upper()
+    if method not in ("GTAW", "PAW"):
+        write_labeled_cell(t2, 91, 1, "钨极类型及直径", "/")
+        write_labeled_cell(t2, 91, 2, "喷嘴直径", "/")
 
     # ===== PQR 电特性实测 R95-R96 =====
     fill_passes_table(t2, FM.TEMPLATE_PASS_ROWS["pqr"], data, "actual")
@@ -1470,7 +1490,11 @@ def fill_wps_block(t2, data):
     def put(r, c, val):
         set_cell(t2, r, c, slash_if_blank(val))
 
-    # 母材 R172~R176（异种金属 C2=材料1 C3=材料2）
+    # 母材 R171~R179（异种金属 C2=材料1 C3=材料2）
+    # 试件序号
+    pwps_no = data.get("pwps_no") or ""
+    specimen_no = (pwps_no + "-1") if pwps_no else "1"
+    put(171, 2, specimen_no); put(171, 3, specimen_no)
     mat2 = data.get("base_material2") or data.get("base_material")
     std2 = data.get("base_standard2") or data.get("base_standard")
     cls1 = data.get("base_class_no") or ""
@@ -1502,6 +1526,7 @@ def fill_wps_block(t2, data):
     put(185, 2, data.get("fill_size")); put(185, 3, data.get("pqr_fill_size"))
     put(186, 2, data.get("fill_class")); put(186, 3, data.get("pqr_fill_class"))  # 焊材分类代号
     put(187, 2, data.get("butt_weld_thick")); put(187, 3, data.get("pqr_weld_thick"))
+    put(188, 2, data.get("fillet_weld_thick") or "/"); put(188, 3, data.get("fillet_weld_thick") or "/")  # 角焊缝焊缝金属范围
 
     # 预热/热处理/气体/位置
     put(191, 2, data.get("preheat_temp"))

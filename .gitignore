@@ -22,3 +22,5 @@ __pycache__/
 
 # 模板文件（加密docx，无法正常diff，单独提交）
 # PQR新格式空白.docx
+*.docx
+!PQR新格式空白.docx
