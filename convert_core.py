@@ -389,167 +389,168 @@ def get_ff(ffs, indices):
 
 def extract_data(doc):
     """从已打开的旧文档提取全部字段。返回 (data, issues)。
-    优先用 FormFields（窗体域），回退到表格单元格文本。
+    策略：全部用表格坐标提取（4种焊接方法表格行号一致，稳定可靠）。
+    FormField 仅用于封面字段（报告编号/指导书号/日期/焊接方法全称）的兜底。
     """
     data = {}
     issues = []
     tables = doc.Tables
+    t3, t4, t5, t6 = tables(3), tables(4), tables(5), tables(6)
 
-    # ---- 收集 FormFields ----
+    # ---- 封面字段（段落 + FormField 兜底）----
+    n_paras = doc.Paragraphs.Count
+    cover_text = "\n".join(
+        clean(doc.Paragraphs(i).Range.Text) for i in range(1, min(45, n_paras + 1))
+    )
+    for name, kw, _ in FM.COVER_FIELDS:
+        v = parse_labeled(cover_text, kw)
+        if v:
+            data[name] = v
+    # FormField 兜底封面字段
     ffs = collect_formfields(doc)
-    # FormField 映射提取（优先）
-    for name, indices in FM.FORMFIELD_MAP.items():
-        data[name] = get_ff(ffs, indices)
-
-    # 焊接方法：FF4 是全称"焊条电弧焊（SMAW）"，提取简称
-    wm_full = data.get("weld_method", "")
-    wm_simple = data.get("weld_method_simple", "")
-    # 优先用全称括号里提取的简称（最可靠），简称FormField在不同焊接方法下索引不稳定
+    if not data.get("report_no"):
+        data["report_no"] = get_ff(ffs, FM.FORMFIELD_MAP.get("report_no", []))
+    if not data.get("pwps_no"):
+        data["pwps_no"] = get_ff(ffs, FM.FORMFIELD_MAP.get("pwps_no", []))
+    if not data.get("assess_date"):
+        data["assess_date"] = get_ff(ffs, FM.FORMFIELD_MAP.get("assess_date", []))
+    # 焊接方法：优先从全称括号提取简称
+    wm_full = get_ff(ffs, FM.FORMFIELD_MAP.get("weld_method", []))
     if wm_full:
         m = re.search(r"[（(]([A-Z]{2,5})[)）]", wm_full)
         if m:
             data["weld_method"] = m.group(1)
         data["weld_method_full"] = wm_full
-    # wm_simple 作为兜底（仅当看起来像焊接方法简称时）
-    elif wm_simple and re.match(r"^[A-Z]{2,5}$", wm_simple):
-        data["weld_method"] = wm_simple
+    if not data.get("weld_method"):
+        for line in cover_text.split("\n"):
+            m = re.search(r"焊接方法.*?[（(]([A-Z]{2,5})[)）]", line)
+            if m:
+                data["weld_method"] = m.group(1)
+                break
 
-    # 焊道工艺参数：用表格坐标提取（FormField索引在不同焊接方法下不稳定）
-    t4 = tables(4)
-    passes = extract_passes(t4, FM.WELD_PASS_SOURCE)
-    # 如果极性列(C5)为空，用全局极性兜底
-    for p in passes:
-        if not p.get("polarity") or p["polarity"] == "/":
-            p["polarity"] = data.get("polarity", "") or ""
-    data["weld_passes"] = passes
-
-    # ---- 电流种类+极性 合并 + 旧称转新称 ----
-    data = map_polarity(data)
-
-    # ---- 表格坐标回退（FormField 没覆盖或为空的字段）----
-    t3, t4 = tables(3), tables(4)
-    # 封面字段（段落）兜底
-    if not data.get("report_no") or not data.get("pwps_no") or not data.get("assess_date") or not data.get("weld_method"):
-        n_paras = doc.Paragraphs.Count
-        cover_text = "\n".join(
-            clean(doc.Paragraphs(i).Range.Text) for i in range(1, min(45, n_paras + 1))
-        )
-        for name, kw, _ in FM.COVER_FIELDS:
-            if not data.get(name):
-                v = parse_labeled(cover_text, kw)
-                if v:
-                    data[name] = v
-
-    # pWPS 字段表格兜底
-    for name, tbl_idx, kws, fb, _ in FM.PWPS_FIELDS:
-        if not data.get(name):
-            tbl = t3 if tbl_idx == 3 else t4
-            val, status = extract_field(tbl, kws, fb)
-            if val:
-                data[name] = val
-
-    # 母材类别号/组别号（FormField已取，空则表格兜底）
-    if not data.get("base_class_no") or not data.get("base_group_no"):
-        cls_raw = cell_text(t3, 8, 1)
-        if not data.get("base_class_no"):
-            data["base_class_no"] = parse_labeled(cls_raw, "类别号")
-        if not data.get("base_group_no"):
-            data["base_group_no"] = parse_labeled(cls_raw, "组别号")
-    if not data.get("base_material") or not data.get("base_standard"):
-        m_raw = cell_text(t3, 9, 1)
-        if not data.get("base_material"):
-            data["base_material"] = parse_labeled(m_raw, "材料代号")
-        if not data.get("base_standard"):
-            data["base_standard"] = parse_labeled(m_raw, "标准号")
-
-    # 异种金属：解析第二种母材（"与...相焊"之后的部分）
+    # ---- pWPS 母材（表3 R8-R9）----
     cls_raw = cell_text(t3, 8, 1)
     mat_raw = cell_text(t3, 9, 1)
+    data["base_class_no"] = parse_labeled(cls_raw, "类别号")
+    data["base_group_no"] = parse_labeled(cls_raw, "组别号")
+    data["base_material"] = parse_labeled(mat_raw, "材料代号")
+    data["base_standard"] = parse_labeled(mat_raw, "标准号")
     data["base_class_no2"] = parse_second(cls_raw, "类别号")
     data["base_group_no2"] = parse_second(cls_raw, "组别号")
     data["base_material2"] = parse_second(mat_raw, "材料代号")
     data["base_standard2"] = parse_second(mat_raw, "标准号")
-
-    # ---- PQR 主体（表格5 兜底）----
-    t5 = tables(5)
-    for name, tbl_idx, kws, fb, _ in FM.PQR_FIELDS:
-        if not data.get(name):
-            val, status = extract_field(t5, kws, fb)
-            if val:
-                data[name] = val
-
-    # PQR 母材/填充金属：FormField索引在不同焊接方法下不稳定，强制用表格坐标覆盖
-    # 母材
-    data["pqr_base_standard"] = parse_labeled(cell_text(t5, 6, 1), "材料标准") or data.get("pqr_base_standard", "")
-    data["pqr_base_material"] = parse_labeled(cell_text(t5, 7, 1), "材料代号") or data.get("pqr_base_material", "")
-    data["pqr_base_class"] = parse_labeled(cell_text(t5, 8, 1), "类、组别号") or data.get("pqr_base_class", "")
-    data["pqr_base_thick"] = parse_labeled(cell_text(t5, 9, 1), "厚度") or data.get("pqr_base_thick", "")
-    # 填充金属
-    data["pqr_fill_class"] = parse_labeled(cell_text(t5, 13, 1), "焊材类别") or data.get("pqr_fill_class", "")
-    data["pqr_fill_model"] = parse_labeled(cell_text(t5, 14, 1), "焊材型号") or data.get("pqr_fill_model", "")
-    data["pqr_fill_brand"] = parse_labeled(cell_text(t5, 15, 1), "焊材牌号") or data.get("pqr_fill_brand", "")
-    data["pqr_fill_standard"] = parse_labeled(cell_text(t5, 16, 1), "焊材标准") or data.get("pqr_fill_standard", "")
-    data["pqr_fill_size"] = parse_labeled(cell_text(t5, 17, 1), "焊材规格") or data.get("pqr_fill_size", "")
-    data["pqr_weld_thick"] = parse_labeled(cell_text(t5, 18, 1), "焊缝金属厚度") or data.get("pqr_weld_thick", "")
-    # 电特性实测值（右列C2）
-    data["pqr_current"] = parse_labeled(cell_text(t5, 16, 2), "焊接电流") or data.get("pqr_current", "")
-    data["pqr_voltage"] = parse_labeled(cell_text(t5, 17, 2), "焊接电压") or data.get("pqr_voltage", "")
-    data["pqr_speed"] = parse_labeled(cell_text(t5, 21, 3), "焊接速度") or data.get("pqr_speed", "")
-    # 钨极尺寸（GTAW用）
-    data["tungsten_size"] = parse_labeled(cell_text(t5, 15, 2), "钨极尺寸") or "/"
-
-    # 清理 base_material2：如果包含"标准号"说明解析混入了标签，用材料1回退
     if "标准号" in (data.get("base_material2") or "") or "标准" in (data.get("base_material2") or ""):
         data["base_material2"] = data.get("base_material", "")
 
-    # PQR 异种金属：拆分两种母材的代号和标准
-    # 表格5 R6: "材料标准：Q/320281PA 96；  NB/T47009"（用；分隔）
-    # 表格5 R7: "材料代号：XC590DR＋20MnMoD"（用＋分隔）
-    # 表格5 R8: "类、组别号：Fe-1-4与类、组别号：Fe-3-2相焊"（用与...相焊）
+    # ---- pWPS 厚度范围（表3 R11-R13）----
+    data["butt_thick"] = parse_labeled(cell_text(t3, 11, 1), "对接焊缝焊件母材厚度范围")
+    data["fillet_thick"] = parse_labeled(cell_text(t3, 11, 2), "角焊缝焊件母材厚度范围")
+    data["pipe_range"] = parse_labeled(cell_text(t3, 12, 1), "管子直径、壁厚范围")
+    data["butt_weld_thick"] = parse_labeled(cell_text(t3, 13, 1), "对接焊缝焊件焊缝金属厚度范围")
+    data["fillet_weld_thick"] = parse_labeled(cell_text(t3, 13, 2), "角焊缝焊件焊缝金属厚度范围")
+
+    # ---- pWPS 填充金属（表3 R16-R21，C1=标签 C2=值）----
+    data["fill_class"] = cell_text(t3, 16, 2)
+    data["fill_standard"] = cell_text(t3, 17, 2)
+    data["fill_size"] = cell_text(t3, 18, 2)
+    data["fill_model"] = cell_text(t3, 19, 2)
+    data["fill_brand"] = cell_text(t3, 20, 2)
+    data["fill_type"] = cell_text(t3, 21, 2)
+
+    # ---- pWPS 电特性（表4 R15-R19）----
+    data["current_type"] = parse_labeled(cell_text(t4, 15, 1), "电流种类")
+    data["polarity"] = parse_labeled(cell_text(t4, 15, 2), "极性")
+    data["current_range"] = parse_labeled(cell_text(t4, 17, 1), "焊接电流范围")
+    data["voltage_range"] = parse_labeled(cell_text(t4, 17, 2), "电弧电压")
+    data["speed_range"] = parse_labeled(cell_text(t4, 18, 1), "焊接速度范围")
+    data["tungsten_type"] = parse_labeled(cell_text(t4, 19, 1), "钨极类型及直径") or parse_labeled(cell_text(t4, 19, 1), "钨极类型")
+    data["nozzle_dia"] = parse_labeled(cell_text(t4, 19, 2), "喷嘴直径")
+
+    # ---- pWPS 焊道参数（表4 R23-R24）----
+    data["weld_passes"] = extract_passes(t4, FM.WELD_PASS_SOURCE)
+
+    # ---- pWPS 气体/位置/预热/技术措施（表4 PWPS_FIELDS 表格坐标）----
+    for name, tbl_idx, kws, fb, _ in FM.PWPS_FIELDS:
+        if name in data:
+            continue
+        tbl = t3 if tbl_idx == 3 else t4
+        val, status = extract_field(tbl, kws, fb)
+        if val:
+            data[name] = val
+
+    # ---- PQR 母材（表5 R6-R9）----
+    data["pqr_base_standard"] = parse_labeled(cell_text(t5, 6, 1), "材料标准")
+    data["pqr_base_material"] = parse_labeled(cell_text(t5, 7, 1), "材料代号")
+    data["pqr_base_class"] = parse_labeled(cell_text(t5, 8, 1), "类、组别号")
+    data["pqr_base_thick"] = parse_labeled(cell_text(t5, 9, 1), "厚度")
+
+    # ---- PQR 填充金属（表5 R13-R18）----
+    data["pqr_fill_class"] = parse_labeled(cell_text(t5, 13, 1), "焊材类别")
+    data["pqr_fill_model"] = parse_labeled(cell_text(t5, 14, 1), "焊材型号")
+    data["pqr_fill_brand"] = parse_labeled(cell_text(t5, 15, 1), "焊材牌号")
+    data["pqr_fill_standard"] = parse_labeled(cell_text(t5, 16, 1), "焊材标准")
+    data["pqr_fill_size"] = parse_labeled(cell_text(t5, 17, 1), "焊材规格")
+    data["pqr_weld_thick"] = parse_labeled(cell_text(t5, 18, 1), "焊缝金属厚度")
+
+    # ---- PQR 电特性实测值（表5 右列C2）----
+    data["pqr_current"] = parse_labeled(cell_text(t5, 16, 2), "焊接电流")
+    data["pqr_voltage"] = parse_labeled(cell_text(t5, 17, 2), "焊接电压")
+    data["pqr_speed"] = parse_labeled(cell_text(t5, 21, 3), "焊接速度")
+    data["tungsten_size"] = parse_labeled(cell_text(t5, 15, 2), "钨极尺寸") or "/"
+
+    # ---- PQR 热处理/位置/预热（表5 PQR_FIELDS 表格坐标）----
+    for name, tbl_idx, kws, fb, _ in FM.PQR_FIELDS:
+        if name in data:
+            continue
+        val, status = extract_field(t5, kws, fb)
+        if val:
+            data[name] = val
+
+    # ---- PQR 异种金属拆分 ----
     pqr_mat_raw = cell_text(t5, 7, 1)
     pqr_std_raw = cell_text(t5, 6, 1)
     pqr_cls_raw = cell_text(t5, 8, 1)
-
-    # 材料代号：用＋/+ 分割
     mat1, mat2 = _split_dissimilar(pqr_mat_raw, "材料代号")
     if mat1:
         data["pqr_base_material"] = mat1
     data["pqr_base_material2"] = mat2 or data.get("pqr_base_material", "")
-
-    # 材料标准：用；;/ 分割
     std1, std2 = _split_dissimilar(pqr_std_raw, "材料标准", sep_type="semicolon")
     if std1:
         data["pqr_base_standard"] = std1
     data["pqr_base_standard2"] = std2 or data.get("pqr_base_standard", "")
-
-    # 类、组别号：用与...相焊
     data["pqr_base_class2"] = parse_second(pqr_cls_raw, "类、组别号")
 
-    # ---- 力学试验（表格6）----
-    t6 = tables(6)
+    # ---- 电流种类+极性 合并 + 旧称转新称 ----
+    data = map_polarity(data)
+
+    # ---- 力学试验（表6）----
     data["tensile"] = extract_table_rows(t6, FM.MECH_TEST["tensile"])
     data["bend"] = extract_table_rows(t6, FM.MECH_TEST["bend"])
     data["impact"] = extract_table_rows(t6, FM.MECH_TEST["impact"], handle_merged=True)
-    # 断裂位置：优先用 FormField（FF167/168）
-    if len(data["tensile"]) >= 1 and data.get("fracture1"):
-        data["tensile"][0]["fracture"] = data["fracture1"]
-    if len(data["tensile"]) >= 2 and data.get("fracture2"):
-        data["tensile"][1]["fracture"] = data["fracture2"]
-    # 试验报告编号：从表格6标题行提取（FormField索引不稳定）
+    # 断裂位置：FormField兜底（无效纯数字忽略）
+    if len(data["tensile"]) >= 1:
+        frac1 = get_ff(ffs, FM.FORMFIELD_MAP.get("fracture1", []))
+        if frac1 and not frac1.isdigit():
+            data["tensile"][0]["fracture"] = frac1
+    if len(data["tensile"]) >= 2:
+        frac2 = get_ff(ffs, FM.FORMFIELD_MAP.get("fracture2", []))
+        if frac2 and not frac2.isdigit():
+            data["tensile"][1]["fracture"] = frac2
+
+    # ---- 试验报告编号（表6 标题行）----
     data["test_report_no"] = {}
     for key, cfg in FM.MECH_TEST.items():
         title_txt = cell_text(t6, cfg["title_row"], 1)
         m = re.search(r"试验报告编号[：:]\s*([0-9A-Za-z\-]+)", title_txt)
         data["test_report_no"][key] = m.group(1) if m else ""
 
-    # 冲击试验温度（整组共用，每组3个试样）
+    # ---- 冲击试验温度（整组共用，每组3个试样）----
     impact = data["impact"]
     data["impact_temp_weld"] = impact[0].get("temp", "") if len(impact) > 0 else ""
     data["impact_temp_haz"] = impact[3].get("temp", "") if len(impact) > 3 else ""
-    # 异种金属可能有第3组（热影响区另一侧），温度
     data["impact_temp_haz2"] = impact[6].get("temp", "") if len(impact) > 6 else ""
 
-    # ---- 金相/无损/结论（表格7）----
+    # ---- 金相/无损/结论（表7）----
     t7 = tables(7)
     metal = {}
     for key, rc in FM.METAL_TEST.items():
