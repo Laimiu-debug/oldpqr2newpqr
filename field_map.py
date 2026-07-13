@@ -82,10 +82,12 @@ PWPS_FIELDS = [
     ("weld_pos_butt",   4, ["对接焊缝位置"],         (2, 1),  None),
     ("weld_pos_fillet", 4, ["角接焊缝位置", "角焊缝位置"], (3, 1), None),
 
-    # ---- 电特性 (旧表格4 R17~R18) ----
+    # ---- 电特性 (旧表格4 R17~R19) ----
     ("current_range",   4, ["焊接电流范围"],         (17, 1), None),
     ("voltage_range",   4, ["电弧电压"],             (17, 2), None),
     ("speed_range",     4, ["焊接速度范围"],         (18, 1), None),
+    ("tungsten_type",   4, ["钨极类型及直径", "钨极类型"],  (19, 1), None),  # GTAW用
+    ("nozzle_dia",      4, ["喷嘴直径"],             (19, 2), None),  # GTAW用
 
     # ---- 技术措施 (旧表格4 R31~R34) ----
     ("clean_method",    4, ["焊前清理和层间清理", "焊前清理"],  (31, 1), None),
